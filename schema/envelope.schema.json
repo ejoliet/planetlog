@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://planetlog.dev/schema/envelope.schema.json",
+  "title": "planetlog Event Envelope v1",
+  "type": "object",
+  "required": ["id", "schema", "type", "time", "ingested_at", "source", "upstream_id", "title", "sig"],
+  "properties": {
+    "id": { "type": "string", "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$", "description": "ULID assigned by Ledger DO" },
+    "schema": { "const": "planetlog/v1" },
+    "type": { "enum": ["quake", "space_weather", "launch", "close_approach", "grb", "gw", "neutrino"] },
+    "time": { "type": "string", "format": "date-time", "description": "Event time (upstream), RFC 3339 UTC" },
+    "ingested_at": { "type": "string", "format": "date-time" },
+    "source": { "type": "string", "minLength": 1 },
+    "upstream_id": { "type": "string", "minLength": 1 },
+    "upstream_url": { "type": ["string", "null"], "format": "uri" },
+    "title": { "type": "string", "minLength": 1 },
+    "magnitude": { "type": ["number", "null"] },
+    "mag_kind": { "type": ["string", "null"] },
+    "geo": {
+      "type": ["object", "null"],
+      "required": ["lat", "lon"],
+      "properties": {
+        "lat": { "type": "number", "minimum": -90, "maximum": 90 },
+        "lon": { "type": "number", "minimum": -180, "maximum": 180 },
+        "depth_km": { "type": ["number", "null"] }
+      },
+      "additionalProperties": false
+    },
+    "sky": {
+      "type": ["object", "null"],
+      "required": ["ra", "dec"],
+      "properties": {
+        "ra": { "type": "number", "minimum": 0, "exclusiveMaximum": 360 },
+        "dec": { "type": "number", "minimum": -90, "maximum": 90 },
+        "error_deg": { "type": ["number", "null"] }
+      },
+      "additionalProperties": false
+    },
+    "payload": { "description": "Raw upstream object, verbatim, never transformed" },
+    "sig": { "type": "string", "description": "base64 Ed25519 signature over JCS(envelope minus sig)" }
+  },
+  "anyOf": [
+    { "properties": { "geo": { "type": "object" } }, "required": ["geo"] },
+    { "properties": { "sky": { "type": "object" } }, "required": ["sky"] }
+  ],
+  "additionalProperties": false
+}

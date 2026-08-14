@@ -1,0 +1,13 @@
+{
+  "name": "planetlog",
+  "version": "0.0.1-spike",
+  "description": "The Planetary Changelog — tail everything happening to the planet, live",
+  "type": "module",
+  "bin": {
+    "planet": "src/main.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "license": "MIT"
+}

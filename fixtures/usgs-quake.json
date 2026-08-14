@@ -1,0 +1,25 @@
+{
+  "type": "quake",
+  "time": "2026-08-13T17:04:22Z",
+  "source": "usgs",
+  "upstream_id": "us7000spike",
+  "upstream_url": "https://earthquake.usgs.gov/earthquakes/eventpage/us7000spike",
+  "title": "M 6.2 - 40 km SW of Antofagasta, Chile",
+  "magnitude": 6.2,
+  "mag_kind": "Mw",
+  "geo": { "lat": -23.65, "lon": -70.4, "depth_km": 45.0 },
+  "sky": null,
+  "payload": {
+    "type": "Feature",
+    "properties": {
+      "mag": 6.2,
+      "magType": "mww",
+      "place": "40 km SW of Antofagasta, Chile",
+      "time": 1786986262000,
+      "status": "reviewed",
+      "tsunami": 0
+    },
+    "geometry": { "type": "Point", "coordinates": [-70.4, -23.65, 45.0] },
+    "id": "us7000spike"
+  }
+}
