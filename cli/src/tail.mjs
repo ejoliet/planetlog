@@ -5,6 +5,7 @@ export async function tail(args) {
   let lastId = args.since;
   let backoffSecs = 1;
   const maxBackoff = 30;
+  let everConnected = false;
 
   while (true) {
     let eventCount = 0;
@@ -20,6 +21,7 @@ export async function tail(args) {
 
       const res = await fetch(url, { headers: { accept: "text/event-stream" } });
       if (!res.ok || !res.body) throw new Error(`stream failed: HTTP ${res.status}`);
+      everConnected = true;
       if (!args.json) console.error(`connected to ${url}`);
 
       const decoder = new TextDecoder();
@@ -58,6 +60,11 @@ export async function tail(args) {
       const match = err.message.match(/HTTP (\d+)/);
       if (match && match[1].startsWith("4")) {
         throw err;
+      }
+      // Never reached the server: bad URL, not deployed, or offline — fail loud, don't loop.
+      if (!everConnected) {
+        const why = err.cause?.code ?? err.cause?.message ?? err.message;
+        throw new Error(`cannot reach ${args.url} (${why}) — pass --url or set PLANETLOG_URL`);
       }
       // Retryable error or stream close - will reconnect below
     }

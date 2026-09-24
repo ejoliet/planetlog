@@ -1,4 +1,4 @@
-.PHONY: keygen dev smoke typecheck test
+.PHONY: keygen dev smoke typecheck test cli
 
 keygen:
 	node scripts/keygen.mjs
@@ -14,3 +14,7 @@ test:
 
 smoke:
 	bash scripts/smoke.sh
+
+cli:
+	cd cli && npm link
+

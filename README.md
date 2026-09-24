@@ -46,13 +46,17 @@ make keygen
 # 2. Start the worker locally (http://127.0.0.1:8787)
 make dev
 
-# 3. In another terminal: tail the planet
-node cli/src/main.mjs tail --url http://127.0.0.1:8787
+# 3. Put `planet` on your PATH (npm link, zero deps), point it at the local worker
+make cli
+export PLANETLOG_URL=http://127.0.0.1:8787
 
-# 4a. Pull real quakes now (wrangler dev does not fire crons; this triggers the handler)
+# 4. In another terminal: tail the planet
+planet tail
+
+# 5a. Pull real quakes now (wrangler dev does not fire crons; this triggers the handler)
 curl 'http://127.0.0.1:8787/__scheduled?cron=*+*+*+*+*'
 
-# 4b. Or ingest the fixture quake by hand (token printed by keygen, also in worker/.dev.vars)
+# 5b. Or ingest the fixture quake by hand (token printed by keygen, also in worker/.dev.vars)
 curl -X POST http://127.0.0.1:8787/ingest \
   -H "authorization: Bearer $INGEST_TOKEN" \
   -H "content-type: application/json" \
@@ -75,6 +79,7 @@ Base URL resolution: `--url` flag > `PLANETLOG_URL` env > `https://api.planetlog
 
 ```bash
 make keygen      # dev Ed25519 key + INGEST_TOKEN -> worker/.dev.vars
+make cli         # npm link -> `planet` on PATH (set PLANETLOG_URL for local dev)
 make dev         # wrangler dev on :8787 (with --test-scheduled so /__scheduled works)
 make typecheck   # tsc --noEmit on the worker
 make test        # unit tests (USGS normalizer), node --test, no build step
