@@ -9,3 +9,6 @@ class_name = "Ledger"
 [[migrations]]
 tag = "v1"
 new_sqlite_classes = ["Ledger"]
+
+[triggers]
+crons = ["* * * * *"]

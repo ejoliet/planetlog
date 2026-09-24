@@ -1,5 +1,5 @@
-// Durable Object: dedupe · ULID · sign · hot window (DO SQLite) · SSE fan-out.
-import { validateIngest, canonicalize, type Envelope, type IngestBody } from "./envelope";
+// Durable Object: append-only changelog (DO SQLite) · revisions per upstream event · ULID · sign · SSE fan-out.
+import { validateIngest, canonicalize, fingerprint, type Envelope, type IngestBody } from "./envelope";
 import { importPrivateKey, publicJwk, signEnvelope } from "./sign";
 import { ulid } from "./ulid";
 
@@ -13,10 +13,11 @@ interface SseClient {
   controller: ReadableStreamDefaultController<Uint8Array>;
   types: Set<string> | null;
   minMag: number | null;
+  keepalive: ReturnType<typeof setInterval> | null;
 }
 
-const HOT_WINDOW_MS = 48 * 60 * 60 * 1000;
 const REPLAY_LIMIT = 1000;
+const KEEPALIVE_MS = 20_000;
 const enc = new TextEncoder();
 
 function json(body: unknown, status = 200): Response {
@@ -26,6 +27,21 @@ function json(body: unknown, status = 200): Response {
   });
 }
 
+const CREATE_EVENTS = `CREATE TABLE IF NOT EXISTS events (
+  id TEXT PRIMARY KEY,
+  source TEXT NOT NULL,
+  upstream_id TEXT NOT NULL,
+  revision INTEGER NOT NULL,
+  supersedes TEXT,
+  fingerprint TEXT NOT NULL,
+  type TEXT NOT NULL,
+  time TEXT NOT NULL,
+  ingested_at TEXT NOT NULL,
+  magnitude REAL,
+  body TEXT NOT NULL,
+  UNIQUE (source, upstream_id, revision)
+)`;
+
 export class Ledger {
   private readonly sql: SqlStorage;
   private readonly key: Promise<CryptoKey>;
@@ -33,17 +49,14 @@ export class Ledger {
 
   constructor(ctx: DurableObjectState, private readonly env: Env) {
     this.sql = ctx.storage.sql;
-    this.sql.exec(`CREATE TABLE IF NOT EXISTS events (
-      id TEXT PRIMARY KEY,
-      source TEXT NOT NULL,
-      upstream_id TEXT NOT NULL,
-      type TEXT NOT NULL,
-      time TEXT NOT NULL,
-      ingested_at TEXT NOT NULL,
-      magnitude REAL,
-      body TEXT NOT NULL,
-      UNIQUE (source, upstream_id)
-    )`);
+    this.sql.exec(CREATE_EVENTS);
+    // Spike-era dev state (pre-revision schema, never deployed) is disposable: drop and recreate.
+    const cols = this.sql.exec("PRAGMA table_info(events)").toArray();
+    if (!cols.some((c) => c.name === "revision")) {
+      this.sql.exec("DROP TABLE events");
+      this.sql.exec(CREATE_EVENTS);
+    }
+    this.sql.exec("CREATE INDEX IF NOT EXISTS events_type_id ON events(type, id)");
     this.key = importPrivateKey(env.SIGNING_KEY);
   }
 
@@ -75,11 +88,16 @@ export class Ledger {
     const err = validateIngest(body);
     if (err) return json({ error: err }, 400);
     const ev = body as IngestBody;
+    const fp = fingerprint(ev);
 
-    const dup = this.sql
-      .exec("SELECT id FROM events WHERE source = ? AND upstream_id = ?", ev.source, ev.upstream_id)
-      .toArray();
-    if (dup.length > 0) return json({ error: "duplicate", id: dup[0]!.id }, 409);
+    const prev = this.sql
+      .exec(
+        "SELECT id, revision, fingerprint FROM events WHERE source = ? AND upstream_id = ? ORDER BY revision DESC LIMIT 1",
+        ev.source,
+        ev.upstream_id,
+      )
+      .toArray()[0];
+    if (prev && prev.fingerprint === fp) return json({ error: "duplicate", id: prev.id }, 409);
 
     const now = Date.now();
     const envelope: Envelope = {
@@ -87,27 +105,28 @@ export class Ledger {
       id: ulid(now),
       schema: "planetlog/v1",
       ingested_at: new Date(now).toISOString().replace(/\.\d{3}Z$/, "Z"),
+      revision: prev ? Number(prev.revision) + 1 : 1,
+      supersedes: prev ? String(prev.id) : null,
     };
     envelope.sig = await signEnvelope(await this.key, { ...envelope, sig: undefined });
 
     this.sql.exec(
-      "INSERT INTO events (id, source, upstream_id, type, time, ingested_at, magnitude, body) VALUES (?,?,?,?,?,?,?,?)",
+      "INSERT INTO events (id, source, upstream_id, revision, supersedes, fingerprint, type, time, ingested_at, magnitude, body) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
       envelope.id,
       envelope.source,
       envelope.upstream_id,
+      envelope.revision,
+      envelope.supersedes,
+      fp,
       envelope.type,
       envelope.time,
       envelope.ingested_at,
       envelope.magnitude ?? null,
       canonicalize(envelope),
     );
-    this.sql.exec(
-      "DELETE FROM events WHERE ingested_at < ?",
-      new Date(now - HOT_WINDOW_MS).toISOString().replace(/\.\d{3}Z$/, "Z"),
-    );
 
     this.broadcast(envelope);
-    return json({ id: envelope.id }, 202);
+    return json({ id: envelope.id, revision: envelope.revision, supersedes: envelope.supersedes }, 202);
   }
 
   private broadcast(envelope: Envelope): void {
@@ -119,9 +138,15 @@ export class Ledger {
       try {
         client.controller.enqueue(frame);
       } catch {
-        this.clients.delete(client); // client gone; drop it
+        this.drop(client); // client gone
       }
     }
+  }
+
+  private drop(client: SseClient): void {
+    if (client.keepalive !== null) clearInterval(client.keepalive);
+    client.keepalive = null;
+    this.clients.delete(client);
   }
 
   private stream(url: URL): Response {
@@ -132,14 +157,16 @@ export class Ledger {
       controller: undefined as unknown as ReadableStreamDefaultController<Uint8Array>,
       types: typesParam ? new Set(typesParam.split(",")) : null,
       minMag: minMagParam !== null ? Number(minMagParam) : null,
+      keepalive: null,
     };
     const clients = this.clients;
     const sql = this.sql;
+    const drop = (): void => this.drop(client);
 
     const body = new ReadableStream<Uint8Array>({
       start(controller): void {
         client.controller = controller;
-        controller.enqueue(enc.encode(": planetlog connected\n\n"));
+        controller.enqueue(enc.encode(": planetlog connected\n\nretry: 2000\n\n"));
         if (since) {
           const rows = sql
             .exec("SELECT body, type, magnitude FROM events WHERE id > ? ORDER BY id LIMIT ?", since, REPLAY_LIMIT)
@@ -150,10 +177,18 @@ export class Ledger {
             controller.enqueue(enc.encode(`id: ${ev.id}\nevent: ${ev.type}\ndata: ${row.body}\n\n`));
           }
         }
+        // Cloudflare/proxies drop idle streams; comment frames keep them open.
+        client.keepalive = setInterval(() => {
+          try {
+            controller.enqueue(enc.encode(": ping\n\n"));
+          } catch {
+            drop();
+          }
+        }, KEEPALIVE_MS);
         clients.add(client);
       },
       cancel(): void {
-        clients.delete(client);
+        drop();
       },
     });
 
@@ -171,6 +206,7 @@ export class Ledger {
     const since = url.searchParams.get("since");
     const until = url.searchParams.get("until");
     const typesParam = url.searchParams.get("types");
+    const all = url.searchParams.get("all") === "1";
 
     let query = "SELECT body FROM events WHERE 1=1";
     const binds: (string | number)[] = [];
@@ -187,6 +223,11 @@ export class Ledger {
       query += ` AND type IN (${types.map(() => "?").join(",")})`;
       binds.push(...types);
     }
+    if (!all) {
+      // Latest revision per (source, upstream_id) only.
+      query +=
+        " AND NOT EXISTS (SELECT 1 FROM events e2 WHERE e2.source = events.source AND e2.upstream_id = events.upstream_id AND e2.revision > events.revision)";
+    }
     query += " ORDER BY id DESC LIMIT ?";
     binds.push(limit);
 
@@ -197,13 +238,13 @@ export class Ledger {
 
   private health(): Response {
     const rows = this.sql
-      .exec("SELECT source, MAX(ingested_at) AS last_ingest, COUNT(*) AS hot_count FROM events GROUP BY source")
+      .exec("SELECT source, MAX(ingested_at) AS last_ingest, COUNT(*) AS count FROM events GROUP BY source")
       .toArray();
-    const feeds: Record<string, { last_ingest: string; hot_count: number }> = {};
+    const feeds: Record<string, { last_ingest: string; count: number }> = {};
     for (const r of rows) {
       feeds[String(r.source)] = {
         last_ingest: String(r.last_ingest),
-        hot_count: Number(r.hot_count),
+        count: Number(r.count),
       };
     }
     return json({ ok: true, sse_clients: this.clients.size, feeds });

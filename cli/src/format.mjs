@@ -17,7 +17,8 @@ export function formatEvent(ev) {
   const t = typeof ev.time === "string" ? ev.time.slice(11, 19) : "??:??:??";
   const type = c(TYPE_COLORS[ev.type] ?? "0", ev.type.padEnd(14));
   const mag = ev.magnitude != null ? c("1", `M${ev.magnitude}`.padEnd(6)) : "      ";
-  return `${dim(t)} ${type} ${mag} ${ev.title}  ${dim(ev.source)}`;
+  const revMarker = ev.revision > 1 ? dim(` rev${ev.revision}`) : "";
+  return `${dim(t)} ${type} ${mag} ${ev.title}  ${dim(ev.source)}${revMarker}`;
 }
 
 export function emit(ev, json) {

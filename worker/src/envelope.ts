@@ -45,6 +45,8 @@ export interface Envelope extends IngestBody {
   id: string;
   schema: "planetlog/v1";
   ingested_at: string;
+  revision: number; // 1-based, per (source, upstream_id)
+  supersedes: string | null; // ULID of the previous revision
   sig?: string;
 }
 
@@ -81,8 +83,14 @@ export function validateIngest(b: unknown): string | null {
   }
   if (geo == null && sky == null) return "at least one of geo/sky must be present";
 
-  if (o.id !== undefined || o.sig !== undefined || o.ingested_at !== undefined) {
-    return "id, sig, ingested_at are assigned by the ledger — do not send them";
+  if (
+    o.id !== undefined ||
+    o.sig !== undefined ||
+    o.ingested_at !== undefined ||
+    o.revision !== undefined ||
+    o.supersedes !== undefined
+  ) {
+    return "id, sig, ingested_at, revision, supersedes are assigned by the ledger — do not send them";
   }
   return null;
 }
@@ -101,4 +109,17 @@ export function canonicalize(v: unknown): string {
     parts.push(JSON.stringify(k) + ":" + canonicalize(o[k]));
   }
   return "{" + parts.join(",") + "}";
+}
+
+// Material fingerprint: what a revision is judged on. payload/upstream_url are
+// excluded — USGS bumps `updated` with no material change.
+export function fingerprint(ev: IngestBody): string {
+  return canonicalize({
+    time: ev.time,
+    title: ev.title,
+    magnitude: ev.magnitude ?? null,
+    mag_kind: ev.mag_kind ?? null,
+    geo: ev.geo ?? null,
+    sky: ev.sky ?? null,
+  });
 }

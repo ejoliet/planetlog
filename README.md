@@ -6,25 +6,28 @@
 17:04:22 quake          M6.2   M 6.2 - 40 km SW of Antofagasta, Chile  usgs
 ```
 
-This is a **spike** (`0.0.1-spike`): a minimal end-to-end slice proving the core loop — a signed, append-only event ledger with a live SSE tail and offline signature verification.
+A signed, append-only event ledger with a live SSE tail and offline signature verification. First real feed: USGS earthquakes, polled every minute by a cron trigger.
 
-## What it proves
+## What it does
 
-1. A fixture event (USGS quake) POSTed to `/ingest` appears on a live `planet tail` in under 2 seconds.
-2. Duplicate ingests are rejected with `409` and never re-broadcast (dedupe by `source` + `upstream_id`).
-3. Every event is Ed25519-signed by the server; `planet verify` validates the signature offline against `/pubkey`.
+1. A cron poller fetches the USGS `all_hour` GeoJSON feed every minute, normalizes each quake, and ingests it into the ledger.
+2. Duplicate ingests are rejected with `409` and never re-broadcast (dedupe by `source` + `upstream_id` + material fingerprint).
+3. When upstream revises an event (USGS bumps a magnitude), the ledger appends a new signed envelope with `revision: n+1` and `supersedes: <previous id>`. `/events` returns the latest revision only (`?all=1` for every revision); the tail shows each revision as it lands (`rev2` marker).
+4. Every event is Ed25519-signed by the server; `planet verify` validates the signature offline against `/pubkey`.
+5. SSE stream sends a `: ping` every 20 s; `planet tail` reconnects with `since=<last id>` on drop, so nothing is missed.
 
 ## Architecture
 
 ```
+USGS feed ──cron (1/min)──▶ scheduled() ──┐
 producer ──POST /ingest──▶ Cloudflare Worker ──▶ Ledger (Durable Object, SQLite)
-                                                   │  assigns ULID, signs envelope,
-                                                   │  persists, broadcasts
+                                                   │  assigns ULID + revision, signs envelope,
+                                                   │  persists (append-only), broadcasts
 clients ◀──SSE /stream── live tail                 │
 clients ◀──GET /events── backfill / history ◀──────┘
 ```
 
-- **worker/** — Cloudflare Worker + `Ledger` Durable Object (SQLite-backed). Routes: `/ingest` (auth'd POST), `/stream` (SSE), `/events` (history), `/pubkey`, `/health`.
+- **worker/** — Cloudflare Worker + `Ledger` Durable Object (SQLite-backed). Routes: `/ingest` (auth'd POST), `/stream` (SSE), `/events` (history), `/pubkey`, `/health`. `worker/src/feeds/usgs.ts` normalizes the USGS feed; `scheduled()` runs it on the cron trigger and posts straight to the DO (no bearer token on the internal path).
 - **cli/** — `planet` CLI, zero runtime deps, Node ≥ 20: `tail` (SSE), `log` (history), `verify` (Ed25519 + JCS canonicalization, RFC 8785).
 - **schema/** — JSON Schema for the v1 event envelope. Event types: `quake`, `space_weather`, `launch`, `close_approach`, `grb`, `gw`, `neutrino`. Every event carries `geo` (lat/lon) or `sky` (ra/dec) coordinates and the raw upstream payload verbatim.
 - **fixtures/** — sample USGS quake used by the smoke test.
@@ -46,7 +49,10 @@ make dev
 # 3. In another terminal: tail the planet
 node cli/src/main.mjs tail --url http://127.0.0.1:8787
 
-# 4. Ingest the fixture quake (token printed by keygen, also in worker/.dev.vars)
+# 4a. Pull real quakes now (wrangler dev does not fire crons; this triggers the handler)
+curl 'http://127.0.0.1:8787/__scheduled?cron=*+*+*+*+*'
+
+# 4b. Or ingest the fixture quake by hand (token printed by keygen, also in worker/.dev.vars)
 curl -X POST http://127.0.0.1:8787/ingest \
   -H "authorization: Bearer $INGEST_TOKEN" \
   -H "content-type: application/json" \
@@ -69,8 +75,9 @@ Base URL resolution: `--url` flag > `PLANETLOG_URL` env > `https://api.planetlog
 
 ```bash
 make keygen      # dev Ed25519 key + INGEST_TOKEN -> worker/.dev.vars
-make dev         # wrangler dev on :8787
+make dev         # wrangler dev on :8787 (with --test-scheduled so /__scheduled works)
 make typecheck   # tsc --noEmit on the worker
+make test        # unit tests (USGS normalizer), node --test, no build step
 make smoke       # full end-to-end acceptance test (see below)
 ```
 
@@ -81,16 +88,17 @@ make smoke            # uses port 8787
 PORT=8899 make smoke  # if 8787 is busy
 ```
 
-Boots the worker, starts a JSON tail, then asserts: ingest → `202` with ULID; event on the tail < 2 s; duplicate → `409` and not re-broadcast; missing token → `401`; `planet verify` passes against `/pubkey`. Prints `SMOKE PASS` on success. Each run uses a unique `upstream_id` so the persisted dedupe in `.wrangler/state` doesn't trip re-runs.
+Boots the worker, starts a JSON tail, then asserts: ingest → `202` with ULID; event on the tail < 2 s; duplicate → `409` and not re-broadcast; revised event → `202` with `revision: 2` and `supersedes`, `/events` shows latest only; missing token → `401`; `planet verify` passes on both revisions; the cron handler ingests real USGS events (skipped without network; `SMOKE_NET=1` makes it required). Prints `SMOKE PASS` on success. Each run uses a unique `upstream_id` so the persisted dedupe in `.wrangler/state` doesn't trip re-runs.
 
 ## Secrets
 
 `worker/.dev.vars` holds the dev signing key and ingest token — gitignored, never committed. For a real deploy, set `SIGNING_KEY` and `INGEST_TOKEN` via `wrangler secret put`.
 
-## Spike scope / non-goals
+## Not yet
 
-- No real upstream pollers yet (USGS/NASA/GCN) — ingest is manual/fixture-driven.
-- Single hardcoded Ledger DO instance; no sharding, retention, or pagination.
+- Only USGS is polled. Next feeds: NOAA SWPC (space weather), Launch Library 2, JPL CNEOS close approaches, GraceDB (GW). GCN/IceCube need a Kafka consumer outside Workers.
+- Not deployed: `api.planetlog.dev` is the CLI default but nothing answers there yet.
+- Single Ledger DO instance; no sharding or pagination. SQLite schema migration is drop-and-recreate (fine until first deploy).
 - One static ingest token; no key rotation.
 
 ## License
