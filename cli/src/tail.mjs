@@ -1,11 +1,12 @@
 // planet tail — SSE over native fetch streaming, no deps.
-import { emit } from "./format.mjs";
+import { emit, DEFAULT_MIN_MAG } from "./format.mjs";
 
 export async function tail(args) {
   let lastId = args.since;
   let backoffSecs = 1;
   const maxBackoff = 30;
   let everConnected = false;
+  const minMag = args["min-mag"] ?? (args.json ? undefined : DEFAULT_MIN_MAG);
 
   while (true) {
     let eventCount = 0;
@@ -15,7 +16,7 @@ export async function tail(args) {
     try {
       const qs = new URLSearchParams();
       if (args.types) qs.set("types", args.types);
-      if (args["min-mag"]) qs.set("min_mag", args["min-mag"]);
+      if (minMag !== undefined) qs.set("min_mag", minMag);
       if (lastId) qs.set("since", lastId);
       const url = `${args.url}/stream${qs.size ? "?" + qs : ""}`;
 

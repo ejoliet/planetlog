@@ -12,6 +12,7 @@
     "ingested_at": { "type": "string", "format": "date-time" },
     "revision": { "type": "integer", "minimum": 1, "description": "1-based revision per (source, upstream_id); assigned by Ledger DO" },
     "supersedes": { "type": ["string", "null"], "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$", "description": "ULID of the previous revision, null for revision 1" },
+    "prev_magnitude": { "type": ["number", "null"], "description": "magnitude of the superseded revision, null for revision 1" },
     "source": { "type": "string", "minLength": 1 },
     "upstream_id": { "type": "string", "minLength": 1 },
     "upstream_url": { "type": ["string", "null"], "format": "uri" },

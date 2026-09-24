@@ -1,4 +1,5 @@
 // Human one-liner: `17:04:22 quake  M6.2  40km SW of Antofagasta, Chile  usgs`
+export const DEFAULT_MIN_MAG = 2;
 const TTY = process.stdout.isTTY;
 const c = (code, s) => (TTY ? `\x1b[${code}m${s}\x1b[0m` : s);
 const dim = (s) => c("2", s);
@@ -16,8 +17,11 @@ const TYPE_COLORS = {
 export function formatEvent(ev) {
   const t = typeof ev.time === "string" ? ev.time.slice(11, 19) : "??:??:??";
   const type = c(TYPE_COLORS[ev.type] ?? "0", ev.type.padEnd(14));
-  const mag = ev.magnitude != null ? c("1", `M${ev.magnitude}`.padEnd(6)) : "      ";
-  const revMarker = ev.revision > 1 ? dim(` rev${ev.revision}`) : "";
+  const delta = ev.revision > 1 && ev.prev_magnitude != null && ev.magnitude != null && ev.prev_magnitude !== ev.magnitude;
+  const mag = delta
+    ? c("1", `M${ev.prev_magnitude}->M${ev.magnitude}`)
+    : ev.magnitude != null ? c("1", `M${ev.magnitude}`.padEnd(6)) : "      ";
+  const revMarker = ev.revision > 1 && !delta ? dim(` rev${ev.revision}`) : "";
   return `${dim(t)} ${type} ${mag} ${ev.title}  ${dim(ev.source)}${revMarker}`;
 }
 

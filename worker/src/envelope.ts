@@ -47,6 +47,7 @@ export interface Envelope extends IngestBody {
   ingested_at: string;
   revision: number; // 1-based, per (source, upstream_id)
   supersedes: string | null; // ULID of the previous revision
+  prev_magnitude: number | null; // magnitude of the superseded revision (null for revision 1)
   sig?: string;
 }
 
@@ -88,9 +89,10 @@ export function validateIngest(b: unknown): string | null {
     o.sig !== undefined ||
     o.ingested_at !== undefined ||
     o.revision !== undefined ||
-    o.supersedes !== undefined
+    o.supersedes !== undefined ||
+    o.prev_magnitude !== undefined
   ) {
-    return "id, sig, ingested_at, revision, supersedes are assigned by the ledger — do not send them";
+    return "id, sig, ingested_at, revision, supersedes, prev_magnitude are assigned by the ledger — do not send them";
   }
   return null;
 }

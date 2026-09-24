@@ -57,6 +57,7 @@ export class Ledger {
       this.sql.exec(CREATE_EVENTS);
     }
     this.sql.exec("CREATE INDEX IF NOT EXISTS events_type_id ON events(type, id)");
+    this.sql.exec("CREATE INDEX IF NOT EXISTS events_time ON events(time, id)");
     this.key = importPrivateKey(env.SIGNING_KEY);
   }
 
@@ -92,7 +93,7 @@ export class Ledger {
 
     const prev = this.sql
       .exec(
-        "SELECT id, revision, fingerprint FROM events WHERE source = ? AND upstream_id = ? ORDER BY revision DESC LIMIT 1",
+        "SELECT id, revision, fingerprint, magnitude FROM events WHERE source = ? AND upstream_id = ? ORDER BY revision DESC LIMIT 1",
         ev.source,
         ev.upstream_id,
       )
@@ -107,6 +108,7 @@ export class Ledger {
       ingested_at: new Date(now).toISOString().replace(/\.\d{3}Z$/, "Z"),
       revision: prev ? Number(prev.revision) + 1 : 1,
       supersedes: prev ? String(prev.id) : null,
+      prev_magnitude: prev ? (prev.magnitude as number | null) : null,
     };
     envelope.sig = await signEnvelope(await this.key, { ...envelope, sig: undefined });
 
@@ -207,6 +209,7 @@ export class Ledger {
     const until = url.searchParams.get("until");
     const typesParam = url.searchParams.get("types");
     const all = url.searchParams.get("all") === "1";
+    const minMagParam = url.searchParams.get("min_mag");
 
     let query = "SELECT body FROM events WHERE 1=1";
     const binds: (string | number)[] = [];
@@ -223,12 +226,17 @@ export class Ledger {
       query += ` AND type IN (${types.map(() => "?").join(",")})`;
       binds.push(...types);
     }
+    if (minMagParam !== null) {
+      // Only magnitude-bearing events are filtered; events without a magnitude pass.
+      query += " AND (magnitude IS NULL OR magnitude >= ?)";
+      binds.push(Number(minMagParam));
+    }
     if (!all) {
       // Latest revision per (source, upstream_id) only.
       query +=
         " AND NOT EXISTS (SELECT 1 FROM events e2 WHERE e2.source = events.source AND e2.upstream_id = events.upstream_id AND e2.revision > events.revision)";
     }
-    query += " ORDER BY id DESC LIMIT ?";
+    query += " ORDER BY time DESC, id DESC LIMIT ?";
     binds.push(limit);
 
     const rows = this.sql.exec(query, ...binds).toArray();
@@ -253,6 +261,7 @@ export class Ledger {
 
 function matches(type: string, magnitude: number | null, client: SseClient): boolean {
   if (client.types && !client.types.has(type)) return false;
-  if (client.minMag !== null && !(magnitude !== null && magnitude >= client.minMag)) return false;
+  // min_mag filters magnitude-bearing events only; launches/GRBs without one still pass.
+  if (client.minMag !== null && magnitude !== null && magnitude < client.minMag) return false;
   return true;
 }

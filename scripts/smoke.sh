@@ -107,6 +107,8 @@ grep "$RUN_ID" "$WORK/tail.ndjson" | head -1 >"$WORK/event.json"
 node "$ROOT/cli/src/main.mjs" verify "$WORK/event.json" --url "$URL" || fail "signature verification failed (rev 1)"
 grep "$RUN_ID" "$WORK/tail.ndjson" | tail -1 >"$WORK/event2.json"
 node "$ROOT/cli/src/main.mjs" verify "$WORK/event2.json" --url "$URL" || fail "signature verification failed (rev 2)"
+node -e 'const e=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8")); if (e.prev_magnitude!==6.2||e.magnitude!==6.9) throw new Error(JSON.stringify(e))' "$WORK/event2.json" || fail "rev 2 should carry prev_magnitude 6.2"
+echo "rev 2 carries prev_magnitude 6.2 -> 6.9"
 
 # 5. cron poller: trigger the scheduled handler, expect a usgs summary line with no errors
 curl -sf "$URL/__scheduled?cron=*+*+*+*+*" >/dev/null || fail "/__scheduled trigger failed"
@@ -126,5 +128,5 @@ fi
 
 # human-format log for the eyeball check
 echo "--- planet log ---"
-node "$ROOT/cli/src/main.mjs" log --url "$URL" --limit 8
+node "$ROOT/cli/src/main.mjs" log --url "$URL" --limit 8 --min-mag 0
 echo "SMOKE PASS ($WORK)"

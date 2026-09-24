@@ -8,7 +8,10 @@ const USAGE = `planetlog — the planetary changelog
 
 Usage:
   planet tail   [--types quake,grb] [--min-mag 5] [--since <ulid>] [--json] [--url <base>]
-  planet log    [--types launch] [--limit 100] [--json] [--url <base>]
+  planet log    [--types launch] [--min-mag 5] [--limit 100] [--all] [--json] [--url <base>]
+
+Human output hides magnitude-bearing events below M2 by default (--min-mag 0 to show all);
+--json is unfiltered. --all on log shows every revision, not just the latest.
   planet verify <event.json> [--url <base>]
 
 Base URL: --url flag > PLANETLOG_URL env > https://api.planetlog.dev`;

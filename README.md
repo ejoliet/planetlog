@@ -12,7 +12,7 @@ A signed, append-only event ledger with a live SSE tail and offline signature ve
 
 1. A cron poller fetches the USGS `all_hour` GeoJSON feed every minute, normalizes each quake, and ingests it into the ledger.
 2. Duplicate ingests are rejected with `409` and never re-broadcast (dedupe by `source` + `upstream_id` + material fingerprint).
-3. When upstream revises an event (USGS bumps a magnitude), the ledger appends a new signed envelope with `revision: n+1` and `supersedes: <previous id>`. `/events` returns the latest revision only (`?all=1` for every revision); the tail shows each revision as it lands (`rev2` marker).
+3. When upstream revises an event (USGS bumps a magnitude), the ledger appends a new signed envelope with `revision: n+1` and `supersedes: <previous id>`. `/events` returns the latest revision only (`?all=1` for every revision); the tail shows each revision as it lands, rendered as a delta (`M6.2->M6.9`) when the magnitude changed, else a `rev2` marker.
 4. Every event is Ed25519-signed by the server; `planet verify` validates the signature offline against `/pubkey`.
 5. SSE stream sends a `: ping` every 20 s; `planet tail` reconnects with `since=<last id>` on drop, so nothing is missed.
 
@@ -69,9 +69,11 @@ The quake appears on your tail within ~2 s, signed.
 
 ```
 planet tail   [--types quake,grb] [--min-mag 5] [--since <ulid>] [--json] [--url <base>]
-planet log    [--types launch] [--limit 100] [--json] [--url <base>]
+planet log    [--types launch] [--min-mag 5] [--limit 100] [--all] [--json] [--url <base>]
 planet verify <event.json> [--url <base>]
 ```
+
+Human output hides magnitude-bearing events below M2 by default (`--min-mag 0` shows everything; events without a magnitude, e.g. launches, always pass). `--json` is unfiltered. `log` prints newest event time first; `--all` includes superseded revisions.
 
 Base URL resolution: `--url` flag > `PLANETLOG_URL` env > `https://api.planetlog.dev`.
 
