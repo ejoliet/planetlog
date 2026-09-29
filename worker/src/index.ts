@@ -1,6 +1,6 @@
 // Routes: /stream /ingest /events /pubkey /health — all served by the Ledger DO.
 import { Ledger, type Env } from "./ledger.ts";
-import { fetchUsgs } from "./feeds/usgs.ts";
+import { FEEDS, due } from "./feeds/index.ts";
 
 export { Ledger };
 
@@ -28,48 +28,47 @@ export default {
     return stub.fetch(req);
   },
 
-  async scheduled(_controller: ScheduledController, env: Env, ctx: ExecutionContext) {
-    try {
-      const events = await fetchUsgs();
-      const stub = env.LEDGER.get(env.LEDGER.idFromName("ledger"));
-
-      let fetched = 0;
-      let newCount = 0;
-      let dupCount = 0;
-      let errorCount = 0;
-
-      for (const event of events) {
-        fetched++;
-        const response = await stub.fetch(
-          new Request("https://ledger/ingest", {
-            method: "POST",
-            headers: { "content-type": "application/json" },
-            body: JSON.stringify(event),
-          })
-        );
-
-        if (response.status === 202) {
-          newCount++;
-        } else if (response.status === 409) {
-          dupCount++;
-        } else {
-          errorCount++;
-          const body = await response.text();
-          console.error(`ingest error (status ${response.status}): ${body}`);
+  async scheduled(controller: ScheduledController, env: Env, _ctx: ExecutionContext) {
+    const stub = env.LEDGER.get(env.LEDGER.idFromName("ledger"));
+    const force = controller.cron === "__all__"; // smoke/dev: run every feed regardless of cadence
+    for (const feed of FEEDS) {
+      if (!force && !due(feed, controller.scheduledTime)) continue;
+      const counts = { feed: feed.name, fetched: 0, new: 0, dup: 0, error: 0 };
+      let error: string | null = null;
+      try {
+        const events = await feed.fetch();
+        for (const event of events) {
+          counts.fetched++;
+          const res = await stub.fetch(
+            new Request("https://ledger/ingest", {
+              method: "POST",
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify(event),
+            }),
+          );
+          if (res.status === 202) counts.new++;
+          else if (res.status === 409) counts.dup++;
+          else {
+            counts.error++;
+            console.error(`${feed.name} ingest error (${res.status}): ${await res.text()}`);
+          }
         }
+      } catch (err) {
+        error = err instanceof Error ? err.message : String(err);
+        console.error(`${feed.name} feed failed: ${error}`);
+        counts.error++;
       }
-
-      console.log(
-        JSON.stringify({
-          feed: "usgs",
-          fetched,
-          new: newCount,
-          dup: dupCount,
-          error: errorCount,
-        })
+      console.log(JSON.stringify(counts));
+      await stub.fetch(
+        new Request("https://ledger/feeds/status", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            name: feed.name, every_minutes: feed.everyMinutes, ok: error === null, error,
+            fetched: counts.fetched, new: counts.new, dup: counts.dup,
+          }),
+        }),
       );
-    } catch (err) {
-      console.error(`scheduled USGS feed fetch failed: ${err instanceof Error ? err.message : String(err)}`);
     }
   },
 } satisfies ExportedHandler<Env>;

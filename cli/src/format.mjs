@@ -1,4 +1,4 @@
-// Human one-liner: `17:04:22 quake  M6.2  40km SW of Antofagasta, Chile  usgs`
+// Human one-liner: `08-13 17:04:22 quake  M6.2  M 6.2 - 40 km SW of Antofagasta, Chile  usgs`
 export const DEFAULT_MIN_MAG = 2;
 const TTY = process.stdout.isTTY;
 const c = (code, s) => (TTY ? `\x1b[${code}m${s}\x1b[0m` : s);
@@ -15,7 +15,8 @@ const TYPE_COLORS = {
 };
 
 export function formatEvent(ev) {
-  const t = typeof ev.time === "string" ? ev.time.slice(11, 19) : "??:??:??";
+  // MM-DD HH:MM:SS — events span days (launches, close approaches), so the date matters.
+  const t = typeof ev.time === "string" ? `${ev.time.slice(5, 10)} ${ev.time.slice(11, 19)}` : "??-?? ??:??:??";
   const type = c(TYPE_COLORS[ev.type] ?? "0", ev.type.padEnd(14));
   const delta = ev.revision > 1 && ev.prev_magnitude != null && ev.magnitude != null && ev.prev_magnitude !== ev.magnitude;
   const mag = delta

@@ -14,6 +14,9 @@ export const EVENT_TYPES = [
 
 export type EventType = (typeof EVENT_TYPES)[number];
 
+// Types that are inherently located; others (space_weather, close_approach, gw) may carry neither.
+export const LOCATED_TYPES: ReadonlySet<EventType> = new Set<EventType>(["quake", "launch", "grb", "neutrino"]);
+
 export interface Geo {
   lat: number;
   lon: number;
@@ -82,7 +85,7 @@ export function validateIngest(b: unknown): string | null {
     if (!isFiniteNumber(sky.dec) || sky.dec < -90 || sky.dec > 90) return "sky.dec out of range";
     if (sky.error_deg != null && !isFiniteNumber(sky.error_deg)) return "sky.error_deg must be a number";
   }
-  if (geo == null && sky == null) return "at least one of geo/sky must be present";
+  if (geo == null && sky == null && LOCATED_TYPES.has(o.type as EventType)) return `${o.type} must carry geo or sky`;
 
   if (
     o.id !== undefined ||

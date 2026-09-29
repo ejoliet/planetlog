@@ -1,0 +1,27 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 26
+          cache: npm
+          cache-dependency-path: worker/package-lock.json
+
+      - run: cd worker && npm ci
+
+      - run: cd worker && npm run typecheck
+
+      - run: cd worker && npm test
+
+      - run: PORT=8899 bash scripts/smoke.sh
+        timeout-minutes: 5

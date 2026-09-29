@@ -42,9 +42,12 @@
     "payload": { "description": "Raw upstream object, verbatim, never transformed" },
     "sig": { "type": "string", "description": "base64 Ed25519 signature over JCS(envelope minus sig)" }
   },
-  "anyOf": [
-    { "properties": { "geo": { "type": "object" } }, "required": ["geo"] },
-    { "properties": { "sky": { "type": "object" } }, "required": ["sky"] }
-  ],
+  "if": { "properties": { "type": { "enum": ["quake", "launch", "grb", "neutrino"] } } },
+  "then": {
+    "anyOf": [
+      { "properties": { "geo": { "type": "object" } }, "required": ["geo"] },
+      { "properties": { "sky": { "type": "object" } }, "required": ["sky"] }
+    ]
+  },
   "additionalProperties": false
 }

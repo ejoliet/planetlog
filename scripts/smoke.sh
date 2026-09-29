@@ -111,7 +111,7 @@ node -e 'const e=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));
 echo "rev 2 carries prev_magnitude 6.2 -> 6.9"
 
 # 5. cron poller: trigger the scheduled handler, expect a usgs summary line with no errors
-curl -sf "$URL/__scheduled?cron=*+*+*+*+*" >/dev/null || fail "/__scheduled trigger failed"
+curl -sf "$URL/__scheduled?cron=__all__" >/dev/null || fail "/__scheduled trigger failed"
 LINE=""
 for _ in $(seq 1 100); do
   LINE=$(grep -o '{"feed":"usgs"[^}]*}' "$WORK/wrangler.log" | tail -1 || true)
@@ -124,7 +124,18 @@ if [ -z "$LINE" ]; then
 else
   echo "poller: $LINE"
   node -e 'const r=JSON.parse(process.argv[1]); if (r.error>0||r.fetched===0) process.exit(1)' "$LINE" || fail "poller reported errors or fetched nothing"
+  sleep 3 # let the slower feeds finish, then show every feed's summary (informational)
+  grep -o '{"feed":"[^}]*}' "$WORK/wrangler.log" | grep -v '"usgs"' | sed 's/^/poller: /' || true
 fi
+
+# poller status surfaced on /health and `planet status`
+node "$ROOT/cli/src/main.mjs" status --json --url "$URL" | node -e '
+  const h = JSON.parse(require("fs").readFileSync(0, "utf8"));
+  const u = h.feeds.find((f) => f.name === "usgs");
+  if (!u || u.stale || u.last_ok === null) throw new Error("usgs feed status missing/stale: " + JSON.stringify(h.feeds));
+' || fail "/health feed status wrong"
+echo "--- planet status ---"
+node "$ROOT/cli/src/main.mjs" status --url "$URL" || true
 
 # human-format log for the eyeball check
 echo "--- planet log ---"

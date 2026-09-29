@@ -58,6 +58,17 @@ export class Ledger {
     }
     this.sql.exec("CREATE INDEX IF NOT EXISTS events_type_id ON events(type, id)");
     this.sql.exec("CREATE INDEX IF NOT EXISTS events_time ON events(time, id)");
+    // Poller bookkeeping, one row per feed; written by scheduled() via the internal /feeds/status route.
+    this.sql.exec(`CREATE TABLE IF NOT EXISTS feeds (
+      name TEXT PRIMARY KEY,
+      every_minutes INTEGER NOT NULL,
+      last_poll TEXT NOT NULL,
+      last_ok TEXT,
+      last_error TEXT,
+      fetched INTEGER NOT NULL,
+      new INTEGER NOT NULL,
+      dup INTEGER NOT NULL
+    )`);
     this.key = importPrivateKey(env.SIGNING_KEY);
   }
 
@@ -74,6 +85,8 @@ export class Ledger {
         return json(publicJwk(this.env.SIGNING_KEY));
       case "/health":
         return this.health();
+      case "/feeds/status":
+        return this.feedStatus(req);
       default:
         return json({ error: "not found" }, 404);
     }
@@ -244,18 +257,51 @@ export class Ledger {
     return json({ events, count: events.length });
   }
 
+  // Internal (not in the public ROUTES set): scheduled() reports each poll here.
+  private async feedStatus(req: Request): Promise<Response> {
+    const r = (await req.json()) as {
+      name: string; every_minutes: number; ok: boolean; error?: string; fetched: number; new: number; dup: number;
+    };
+    const now = new Date().toISOString().replace(/\.\d{3}Z$/, "Z");
+    this.sql.exec(
+      `INSERT INTO feeds (name, every_minutes, last_poll, last_ok, last_error, fetched, new, dup) VALUES (?,?,?,?,?,?,?,?)
+       ON CONFLICT(name) DO UPDATE SET every_minutes = excluded.every_minutes, last_poll = excluded.last_poll,
+         last_ok = COALESCE(excluded.last_ok, feeds.last_ok), last_error = excluded.last_error,
+         fetched = excluded.fetched, new = excluded.new, dup = excluded.dup`,
+      r.name, r.every_minutes, now, r.ok ? now : null, r.ok ? null : (r.error ?? "unknown"), r.fetched, r.new, r.dup,
+    );
+    return json({ ok: true });
+  }
+
   private health(): Response {
-    const rows = this.sql
+    const counts = this.sql
       .exec("SELECT source, MAX(ingested_at) AS last_ingest, COUNT(*) AS count FROM events GROUP BY source")
       .toArray();
-    const feeds: Record<string, { last_ingest: string; count: number }> = {};
-    for (const r of rows) {
-      feeds[String(r.source)] = {
-        last_ingest: String(r.last_ingest),
-        count: Number(r.count),
-      };
+    const bySource: Record<string, { last_ingest: string; count: number }> = {};
+    for (const r of counts) {
+      bySource[String(r.source)] = { last_ingest: String(r.last_ingest), count: Number(r.count) };
     }
-    return json({ ok: true, sse_clients: this.clients.size, feeds });
+    const now = Date.now();
+    const feeds = this.sql.exec("SELECT * FROM feeds ORDER BY name").toArray().map((f) => {
+      const lastOk = f.last_ok ? Date.parse(String(f.last_ok)) : NaN;
+      const everyMs = Number(f.every_minutes) * 60_000;
+      // Stale: no successful poll within 3 cadences (+2 min slack for cron jitter).
+      const stale = !Number.isFinite(lastOk) || now - lastOk > 3 * everyMs + 120_000;
+      return {
+        name: String(f.name),
+        every_minutes: Number(f.every_minutes),
+        last_poll: String(f.last_poll),
+        last_ok: f.last_ok === null ? null : String(f.last_ok),
+        last_error: f.last_error === null ? null : String(f.last_error),
+        last_fetched: Number(f.fetched),
+        last_new: Number(f.new),
+        stale,
+        events: bySource[String(f.name)]?.count ?? 0,
+        last_ingest: bySource[String(f.name)]?.last_ingest ?? null,
+      };
+    });
+    const ok = feeds.length > 0 && feeds.every((f) => !f.stale);
+    return json({ ok, sse_clients: this.clients.size, feeds, sources: bySource });
   }
 }
 

@@ -3,6 +3,7 @@
 import { tail } from "./tail.mjs";
 import { log } from "./log.mjs";
 import { verify } from "./verify.mjs";
+import { status } from "./status.mjs";
 
 const USAGE = `planetlog — the planetary changelog
 
@@ -13,6 +14,7 @@ Usage:
 Human output hides magnitude-bearing events below M2 by default (--min-mag 0 to show all);
 --json is unfiltered. --all on log shows every revision, not just the latest.
   planet verify <event.json> [--url <base>]
+  planet status [--json] [--url <base>]
 
 Base URL: --url flag > PLANETLOG_URL env > https://api.planetlog.dev`;
 
@@ -50,6 +52,9 @@ try {
       break;
     case "verify":
       await verify(args);
+      break;
+    case "status":
+      await status(args);
       break;
     default:
       console.log(USAGE);
